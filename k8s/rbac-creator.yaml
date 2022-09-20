@@ -1,0 +1,146 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  creationTimestamp: null
+  name: rbac-creator
+  namespace: default
+spec:
+  template:
+    metadata:
+      creationTimestamp: null
+    spec:
+      serviceAccountName: rbac-creator
+      containers:
+      - command: ["sh","-c","/opt/scripts/rbac-creator.sh"]
+        env:
+        - name: OWNER_NAMESPACE
+          value: starburst
+        - name: TARGET_SERVICE_ACCOUNT
+          value: mso-sa
+        image: cmwylie19/kube-argo-base
+        name: rbac-creator
+        resources: {}
+        volumeMounts:
+        - name: rbac-creator
+          mountPath: /opt/scripts
+        securityContext:
+           runAsUser: 0
+      restartPolicy: Never
+      volumes:
+      - name: rbac-creator
+        configMap:
+          name: rbac-creator
+          defaultMode: 0711 
+---
+apiVersion: v1
+data:
+  rbac-creator.sh: |-
+    #!/bin/bash
+
+    # Scraping ClusterRole
+    kubectl apply -f -<<EOF
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      ownerReferences:
+        - apiVersion: v1
+          kind: Namespace
+          name: starburst
+          uid: $(kubectl get ns $OWNER_NAMESPACE --template='{{ .metadata.uid}}')
+      creationTimestamp: null
+      name: mso-prometheus-cr
+    rules:
+    - apiGroups:
+      - ""
+      resources:
+      - nodes/metrics
+      verbs:
+      - get
+    - nonResourceURLs:
+      - /metrics
+      verbs:
+      - get
+    - apiGroups:
+      - ""
+      resources:
+      - namespaces
+      verbs:
+      - get
+    - apiGroups:
+      - ""
+      resources:
+      - services
+      - endpoints
+      - pods
+      verbs:
+      - get
+      - list
+      - watch
+    - apiGroups:
+      - monitoring.coreos.com
+      resources:
+      - alertmanagers
+      verbs:
+      - get
+    - apiGroups:
+      - security.openshift.io
+      resourceNames:
+      - nonroot
+      resources:
+      - securitycontextconstraints
+      verbs:
+      - use
+    EOF
+
+    # Bind ClusterRole to MSO ServiceAccount
+    kubectl apply -f -<<EOF
+    kind: ClusterRoleBinding
+    apiVersion: rbac.authorization.k8s.io/v1
+    metadata:
+      name: mso-prometheus-crb
+      ownerReferences:
+        - apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRole
+          name: mso-prometheus-cr
+          uid: $(kubectl get clusterrole mso-prometheus-cr --template='{{ .metadata.uid }}')
+    subjects:
+      - kind: ServiceAccount
+        name: $TARGET_SERVICE_ACCOUNT
+        namespace: $OWNER_NAMESPACE
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: mso-prometheus-cr
+    EOF
+kind: ConfigMap
+metadata:
+  creationTimestamp: null
+  name: rbac-creator
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  creationTimestamp: null
+  name: rbac-creator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  creationTimestamp: null
+  name: rbac-creator-admin
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: rbac-creator
+  namespace: default
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  creationTimestamp: null
+  name: starburst
+spec: {}
+status: {}
